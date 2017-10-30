@@ -101,7 +101,7 @@ function ini_parser {
     section=$(cat ${1} | awk "/\[${2}\]/{f=1;next} /\[/{f=0} f" );
     ret=${section}
     if [[ ${3} ]]; then
-        ret=$(echo "${section}" | awk -F "=" '/'${3}'/ {gsub(/^[ \s]+|[ \s]+$/, "", $2); print $2}');
+        ret=$(echo "${section}" | awk -F "=" '/'${3}'/ {gsub(/^[ ]+|[ ]+$/, "", $2); print $2}');
     fi
     echo "${ret}";
 }
