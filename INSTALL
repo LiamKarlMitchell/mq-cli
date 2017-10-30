@@ -1,0 +1,85 @@
+#!/bin/bash
+#
+################################################################################
+#
+#      Copyright (C) 2017 Josh Sunnex (jsunnex@gmail.com)
+#
+#  This program is dual-licensed; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This Program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this file; see the file COPYING.  If not, see
+#  <http://www.gnu.org/licenses/>.
+#
+################################################################################
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+
+
+function check_root {
+    echo "##########################################"
+    echo "##     Checking for root permission     ##"
+    echo "##########################################"
+    if [ "$(id -u)" != "0" ]; then
+        echo "ERROR: This script must be run as root...."
+        echo
+        exit 1
+    fi
+    echo
+}
+
+
+function install_link {
+    echo "###########################################"
+    echo "##         Installing as Symlink         ##"
+    echo "###########################################"
+    chmod +x ${DIR}/mq
+    rm -f /usr/bin/mq
+    rm -f /etc/bash_completion.d/mq
+    ln -sv ${DIR}/mq /usr/bin/mq
+    ln -sv /usr/bin/mq /etc/bash_completion.d/mq
+    echo
+}
+
+
+function install_cp {
+    echo "##########################################"
+    echo "##           Installing Files           ##"
+    echo "##########################################"
+    chmod +x ${DIR}/mq
+    rm -f /usr/bin/mq
+    rm -f /etc/bash_completion.d/mq
+    cp -fv ${DIR}/mq /usr/bin/mq
+    ln -sv /usr/bin/mq /etc/bash_completion.d/mq
+    echo
+}
+
+#####################
+##     Execute     ##
+#####################
+
+check_root
+if [ "$1" == "link" ]; then
+    install_link
+elif [ "$1" == "copy" ]; then
+    install_cp
+else
+    echo -n "Example INSTALL <TYPE>
+
+    <TYPE> can be either:
+
+    	link 		Installs as symlinks to this dir
+    	copy 		Copies necessary files to destination
+    "
+    echo
+fi
+
+exit 0

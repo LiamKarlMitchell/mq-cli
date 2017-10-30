@@ -1,0 +1,467 @@
+#!/bin/bash
+#
+################################################################################
+#
+#      Copyright (C) 2017 Josh Sunnex (jsunnex@gmail.com)
+#
+#  This program is dual-licensed; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This Program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this file; see the file COPYING.  If not, see
+#  <http://www.gnu.org/licenses/>.
+#
+################################################################################
+
+
+######################
+##
+#       TODO:
+#
+#   - Add individual command help functions
+#   - Add individual command bash complete function (if possible - probably not worth the effort)
+#
+##
+######################
+
+VERSION=1.0.0
+
+######################
+##
+#       CONFIG:
+#
+# PATCH_NAMING  - template for naming patches. %s is replaced with.
+PATCH_NAMING="%s"
+PATCH_NAMING_CONFIG=$(awk -F "=" '/patch_naming/ {print $2}' ${HOME}/.hgrc);
+if [[ ${PATCH_NAMING_CONFIG} ]]; then
+    PATCH_NAMING=${PATCH_NAMING_CONFIG};
+fi
+# PATCH_DIR     - directory where patches are stored when popped, exported and imported into the project.
+PATCH_DIR=${HOME}"/.mq/patches"
+PATCH_DIR_CONFIG=$(awk -F "=" '/patch_dir/ {print $2}' ${HOME}/.hgrc);
+if [[ ${PATCH_NAMING_CONFIG} ]]; then
+    PATCH_NAMING=${PATCH_NAMING_CONFIG};
+fi
+#
+##
+######################
+
+function command_exists {
+    cat "${BASH_SOURCE[0]}" | grep "mq_${1}()" > /dev/null;
+    return $?;
+}
+
+function working_project {
+    remote=$(hg paths)
+    remote=${remote[0]}
+    remote=${remote%/}
+    remote=${remote##*/}
+    echo ${remote}
+}
+
+function get_commands_list {
+    re='(?<=mq_)([a-z]+)(?=\()';
+    commands=$(cat ${BASH_SOURCE[0]} | grep -o -P ${re});
+    echo ${commands};
+}
+
+function read_command_help {
+    re='(?<=#--)(.*?)$';
+    message=$(cat ${BASH_SOURCE[0]} | grep "mq_${1}()" | grep -o -P ${re});
+    echo ${message};
+}
+
+function mq_bash_auto_complete {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    opts=$(get_commands_list)
+
+    if [[ ${cur} == [a-z]* ]] ; then
+        COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) );
+        return 0;
+    fi
+    if [[ ${prev} && ${prev} != "mq" ]] ; then
+        # For now we don't need to support options
+        return 0;
+    fi
+    COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) );
+}
+
+function indent {
+    sed 's/^/    /'; 
+}
+
+function main_usage {
+    echo -n "mq [COMMAND] [OPTIONS]
+
+    list of commands:
+    "
+    echo 
+    for command in $(get_commands_list)
+    do
+        help_message=$(read_command_help ${command});
+        ((spaces = 15 - ${#command}));
+        white_space=$(printf %${spaces}s);
+        echo "        ${command}" "${white_space}" "${help_message}";
+    done
+    echo
+}
+
+mq_apply() { #-- Apply a patch to your working branch.
+    conf_array='';
+    # First check if current try has uncommitted changes (cannot apply without committing changes first)
+    if [[ $(hg diff) ]]; then
+        echo "There are uncommitted changes in your working branch. You need to commit these before applying a patch."
+        # echo
+        # hg diff
+        exit 1
+    fi
+    # Check if there is already a patch applied
+    if [[ $(hg qseries) ]]; then
+        applied_patch=$(hg qseries);
+        applied_patch=${applied_patch[0]};
+        echo "${applied_patch} is already a patch applied to your working branch."
+        exit 1
+    else # no patches currently applied
+        project=$(working_project)
+        if [[ ${2} && "${2}" != "--list" ]]; then
+            selected_patch=${2};
+            if [[ -f "${PATCH_DIR}/${selected_patch}" ]]; then
+                echo "Setting current patch to ${selected_patch} in working branch...";
+            else
+                echo "No patch was found matching ${selected_patch}."; echo "No patch applied.";
+            fi
+        else
+            # List all patches
+            echo
+            i=1
+            k=0
+            for file in ${PATCH_DIR}/*
+            do
+                if [[ -f $file ]]; then
+                    patch_name=${file##*/};
+                    patch_project=${file##*_};
+                    if [[ "${patch_project}" != "${project}" ]]; then # Ignore all patches not named for this project
+                        continue;
+                    fi
+                    echo "      ${i}) ${patch_name}";
+                    conf_array[ $k ]="${patch_name}" 
+                fi
+                ((i++))
+                ((k++))
+            done
+            if [[ ${conf_array} ]]; then # Only show if list not empty
+                echo
+                read -p "Select a patch fromt he list above: " menu
+                numbers='^[0-9]+$'
+                if [[ "${menu}" -le "${#conf_array[@]}" && ${menu} =~ ${numbers} && "${menu}" != "0" ]]; then
+                    (( menu-- ))
+                    selected_patch=${conf_array[${menu}]}
+                    echo; echo "Setting current patch to ${selected_patch} in working branch...";
+                else
+                    echo; echo "That was not a valid selection."; echo "No patch applied.";
+                    exit 1
+                fi
+            else
+                echo "No patches were found for your current project ${project}."; echo "No patch applied.";
+            fi
+        fi
+        patch_path=${PATCH_DIR}/${selected_patch};
+        hg qimport ${patch_path} 2> /dev/null;
+        hg qpush ${selected_patch} 2> /dev/null;
+    fi
+}
+
+mq_clear() { #-- Wipe the current patch from your working branch. Warning! All non-exported changes will be lost.
+    echo "WARNING!! This command will completely clear you patch queue. There is no coming back from this."
+    echo 
+    read  -p "If you wish to continue, type the word 'YES' in caps:  " AN
+    if [[ "${AN}" == "YES" ]]; then
+        hg qpop -a -f 2> /dev/null;
+        for patch in $(hg qseries) 
+        do
+            hg qdelete ${patch};
+        done
+    fi
+}
+
+mq_commit() { #-- Commit the specified files or all outstanding changes.
+    if [[ $(hg diff) ]]; then
+        touch /tmp/commit_message.log
+        for file in ./.hg/patches/* 
+        do
+            if [[ -f $file ]]; then
+                if [[ "$file" != *"series" && "$file" != *"status" && ! -s /tmp/commit_message.log ]]; then
+                    while read -r line
+                    do
+                        if [[ "$line" == "#"* ]]; then
+                            continue
+                        fi
+                        if [[ "$line" == "diff --git"* ]]; then
+                            break;
+                        fi
+                        echo $line >> /tmp/commit_message.log
+                    done < "$file"
+                fi
+            fi
+        done
+        if [[ "$@" != *"--no-message"* ]]; then 
+            # prevents a commit message being added/amended
+            nano /tmp/commit_message.log
+        fi
+        ARGS='-U'
+        if [[ -s /tmp/commit_message.log ]]; then
+            ARGS="${ARGS} -l /tmp/commit_message.log"
+        fi
+        hg qrefresh ${ARGS}
+        if [[ -f /tmp/commit_message.log ]]; then
+            rm -f /tmp/commit_message.log
+        fi
+    else
+        echo "nothing changed"
+    fi
+}
+
+mq_diff() { #-- Diff repository (or selected files).
+    hg qdiff ${@:2} -p -U 8;
+}
+
+mq_export() { #-- Generate a local output of a patch to a specified directory.
+    if [[ ${2} ]]; then
+        export_dir=${2%/};
+        project=$(working_project);
+        # List all patches
+        echo
+        i=1
+        k=0
+        for file in ${PATCH_DIR}/*
+        do
+            if [[ -f $file ]]; then
+                patch_name=${file##*/};
+                patch_project=${file##*_};
+                if [[ "${patch_project}" != "${project}" ]]; then # Ignore all patches not named for this project
+                    continue;
+                fi
+                echo "      ${i}) ${patch_name}";
+                conf_array[ $k ]="${patch_name}" 
+            fi
+            ((i++))
+            ((k++))
+        done
+        if [[ ${conf_array} ]]; then # Only show if list not empty
+            echo
+            read -p "Select a patch from the list above: " menu
+            numbers='^[0-9]+$'
+            if [[ "${menu}" -le "${#conf_array[@]}" && ${menu} =~ ${numbers} && "${menu}" != "0" ]]; then
+                (( menu-- ))
+                selected_patch=${conf_array[${menu}]}
+                echo; echo "Exporting patch ${selected_patch}...";
+            else
+                echo; echo "That was not a valid selection."; echo "No patch selected.";
+                exit 1
+            fi
+        else
+            echo "No patches were found for your current project ${project}. Check that you have popped your patch before trying to export";
+        fi
+    else # User needs to provide an output folder
+        echo "mq export [LOCATION]"
+        echo 
+        echo "    No location specified."
+        echo 
+        exit 1
+    fi
+    patch_path=${PATCH_DIR}/${selected_patch};
+    # TODO: check if patch already exists
+    cp $patch_path ${export_dir}/${selected_patch}.patch
+}
+
+mq_import() { #-- Import a patch into this project.
+    apply=0;
+    for arg in $@
+    do
+        if [[ "${arg}" == "import" ]]; then
+            continue;
+        fi
+        if [[ "${arg}" == "-a" ]]; then
+            apply=1;
+        else
+            src=$arg;
+        fi
+    done
+    if [[ ! -f ${src} ]]; then 
+        echo "Failed to import '${src}'";
+        echo "File does not exist. Please ensure you have specified the correct location.";
+        echo
+        exit 1
+    fi
+    # Import the patch
+    echo "Importing patch '${src}'...";
+    echo
+    read -p "Provide a name for this patch: " name
+    project=$(working_project);
+    selected_patch=${PATCH_NAMING/\%s/${name}}_${project}
+    # TODO: check if patch already exists
+    echo $selected_patch;
+    patch_path=${PATCH_DIR}/${selected_patch};
+    if [[ -s ${patch_path} ]]; then  # patch with this name already exists...
+        echo
+        echo "A patch with this name already exists."
+        read -p "Do you wish to overwrite it? (y/n) " AN
+        if [[ "${AN}" != "Y" && "${AN}" != "y" ]]; then
+            echo 
+            echo "Patch not imported."
+            exit 0;
+        fi
+    fi
+    cp -f ${src} ${patch_path}
+    status=$?;
+    echo
+    if [[ $status == 0 ]]; then
+        echo "Patch successfully imported";
+    else
+        echo "Failed to import patch."
+    fi
+    if [[ $apply == 1 ]]; then 
+        echo 
+        echo "Apply patch to working branch..."
+        echo
+        mq_apply
+    fi
+}
+
+mq_new() { #-- Generate new patch for current working branch.
+    if [[ -s ./.hg/patches/series ]]; then 
+        echo "abort: and active patch already exists"; 
+        exit 1
+    fi
+    if [[ -s ./.hg/patches/status ]]; then 
+        echo "abort: and active patch already exists"; 
+        exit 1
+    fi
+    project=$(working_project)
+    name=${PATCH_NAMING/\%s/${2}}_${project}
+    hg qnew ${name} ${@:3} --git --currentuser;
+}
+
+mq_patches() { #-- Show a list of patches in the patch cache pool.
+    project=$(working_project)
+    # List all patches
+    echo -n "
+    list of available patches:
+    (a patch with a '*' denotes the currently applied patch)
+    "
+    echo 
+    for file in ${PATCH_DIR}/*
+    do
+        if [[ -f $file ]]; then
+            patch_name=${file##*/};
+            patch_project=${file##*_};
+            if [[ "${patch_project}" != "${project}" ]]; then # Ignore all patches not named for this project
+                continue;
+            fi
+            applied=' ';
+            applied_patch=$(hg qseries);
+            applied_patch=${applied_patch[0]};
+            if [[ "${applied_patch}" == "${patch_name}" ]]; then
+                applied='*'
+            fi
+            echo "     ${applied} ${patch_name}";
+        fi
+    done
+    echo
+}
+
+mq_pop() { #-- Pops the current patch off the working branch and into out patch cache pool.
+    # pop off current patch to mq PATCH_DIR
+    # First check if there are uncommitted changes and warn user
+    if [[ $(hg diff) ]]; then
+        read -p "There are uncommitted changes in your working branch. Would you like to commit these first? (y/n) " AN
+        if [[ "${AN}" != "N" && "${AN}" != "n" ]]; then
+            exit 0;
+        fi
+    fi
+    if [[ $(hg qseries) ]]; then
+        applied_patch=$(hg qseries);
+        applied_patch=${applied_patch[0]};
+        applied_patch_path="./.hg/patches/${applied_patch}";
+        echo "Popping patch ${applied_patch}";
+        cp -f ${applied_patch_path} ${PATCH_DIR}/;
+        status=$?;
+        if [[ $status == 0 && -s ${PATCH_DIR}/${applied_patch} ]]; then # Ensure patch was copied correctly before removing from working tree
+            hg qpop -a -f 2> /dev/null;
+            for patch in $(hg qseries) 
+            do
+                hg qdelete ${patch};
+            done
+        fi
+    else
+        echo "no patches applied"
+    fi
+}
+
+mq_status() { #-- Show any patches currently applied to your working branch and show changed files in the working directory.
+    hg_branch=$(hg id -b);
+    hq_qseries=$(hg qseries);
+    hg_status=$(hg status);
+    echo -n "
+    Current branch:     ${hg_branch}
+    Applied patch:      ${hq_qseries}
+
+
+    The codes used to show the status of files are:
+
+      M = modified
+      A = added
+      R = removed
+      C = clean
+      ! = missing (deleted by non-hg command, but still tracked)
+      ? = not tracked
+      I = ignored
+        = origin of the previous file (with --copies)
+
+
+Status:
+    "
+    echo
+    hg status ${@:2}
+    echo
+}
+
+mq_version() { #-- Output version and copyright information.
+    echo -n $VERSION
+    echo 
+}
+
+### Env setup ----------------------------------------------------
+mkdir -p ${PATCH_DIR}
+
+### Option processing --------------------------------------------
+
+
+if [[ $( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd ) == "/etc/bash_completion.d" ]]; then
+    # Read this file as bash auto completion
+    complete -F mq_bash_auto_complete mq
+else
+    if [ $# == 0 ] ; then
+        main_usage;
+        exit 1;
+    fi
+
+    command_exists ${1} && mq_${1} $@ || main_usage
+
+    exit 0
+
+
+    if [[ -s ${PATCH_DIR}/${APPLIED_PATCH} ]]; then
+        echo "yes"
+    fi
+fi
