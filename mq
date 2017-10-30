@@ -69,7 +69,20 @@ function mq_bash_auto_complete {
         COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) );
         return 0;
     fi
+
     if [[ ${prev} && ${prev} != "mq" ]] ; then
+        # Complete file paths for these options
+        if [ ${prev} == "import" ] || [ ${prev} == "export" ] ; then
+            # Unescape space
+            cur=${cur//\\ / }
+            # Expand tilder to $HOME
+            [[ ${cur} == "~/"* ]] && cur=${cur/\~/$HOME}
+            # Show completion if path exist (and escape spaces)
+            compopt -o filenames
+            local files=("${cur}"*)
+            [[ -e ${files[0]} ]] && COMPREPLY=( "${files[@]// /\ }" )
+            return 0
+        fi
         # For now we don't need to support options
         return 0;
     fi
