@@ -71,7 +71,6 @@ function mq_bash_auto_complete {
     fi
 
     if [[ ${prev} && ${prev} != "mq" ]] ; then
-
         # Complete file paths for these options
         if [ ${prev} == "import" ] || [ ${prev} == "export" ] ; then
             # Unescape space
@@ -84,7 +83,6 @@ function mq_bash_auto_complete {
             [[ -e ${files[0]} ]] && COMPREPLY=( "${files[@]// /\ }" )
             return 0
         fi
-
         # For now we don't need to support options
         return 0;
     fi
