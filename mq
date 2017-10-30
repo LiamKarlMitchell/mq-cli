@@ -49,6 +49,7 @@ PATCH_DIR_CONFIG=$(awk -F "=" '/patch_dir/ {print $2}' ${HOME}/.hgrc);
 if [[ ${PATCH_NAMING_CONFIG} ]]; then
     PATCH_NAMING=${PATCH_NAMING_CONFIG};
 fi
+HG_USERNAME=$(awk -F "=" '/username/ {print $2}' ${HOME}/.hgrc);
 #
 ##
 ######################
@@ -197,32 +198,50 @@ mq_clear() { #-- Wipe the current patch from your working branch. Warning! All n
 mq_commit() { #-- Commit the specified files or all outstanding changes.
     if [[ $(hg diff) ]]; then
         touch /tmp/commit_message.log
-        for file in ./.hg/patches/* 
+        applied_patch=$(hg qapplied)
+        patch_file="./.hg/patches/${applied_patch}"
+        parent_changeset=$(cat ${patch_file} | grep -o -P '(?<=# Parent  )(.*?)$');
+        while read -r line
         do
-            if [[ -f $file ]]; then
-                if [[ "$file" != *"series" && "$file" != *"status" && ! -s /tmp/commit_message.log ]]; then
-                    while read -r line
-                    do
-                        if [[ "$line" == "#"* ]]; then
-                            continue
-                        fi
-                        if [[ "$line" == "diff --git"* ]]; then
-                            break;
-                        fi
-                        echo $line >> /tmp/commit_message.log
-                    done < "$file"
-                fi
+            if [[ "$line" == "#"* ]]; then
+                continue
             fi
+            if [[ "$line" == "diff --git"* ]]; then
+                break;
+            fi
+            echo $line >> /tmp/commit_message.log
+        done < "${patch_file}"
+        hg_branch=$(hg id -b);
+        hg_status=$(hg status -m -a -r -d -c --no-status);
+        hq_qseries=$(hg qseries);
+        body="
+HG: Enter commit message.  Lines beginning with 'HG:' are removed.
+HG: Leave message empty to abort commit.
+HG: --
+HG: User:   ${HG_USERNAME}
+HG: Branch:  ${hg_branch}
+HG: Patch:   ${hq_qseries}
+HG: Parent:  ${parent_changeset}
+HG: --
+";
+        for change in ${hg_status}
+        do
+            body=${body}"HG: changed  ${change}
+";
         done
+        echo "${body}" >> /tmp/commit_message.log
         if [[ "$@" != *"--no-message"* ]]; then 
             # prevents a commit message being added/amended
             nano /tmp/commit_message.log
         fi
-        ARGS='-U'
-        if [[ -s /tmp/commit_message.log ]]; then
-            ARGS="${ARGS} -l /tmp/commit_message.log"
+        message=$(grep -v '^HG:' /tmp/commit_message.log)
+        if [[ ${message} ]]; then
+            echo "${message}" > /tmp/commit_message.log; # Clean message log
+            ARGS="-U -l /tmp/commit_message.log";
+            hg qrefresh ${ARGS}
+        else
+            echo "abort: empty commit message"
         fi
-        hg qrefresh ${ARGS}
         if [[ -f /tmp/commit_message.log ]]; then
             rm -f /tmp/commit_message.log
         fi
